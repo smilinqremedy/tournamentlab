@@ -81,3 +81,85 @@ def get_fixture_by_id(
 def list_fixtures(fixtures: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return a shallow copy of the fixtures list."""
     return list(fixtures)
+
+
+# --- Engineer B Ownership: Score Validation and Recording ---
+
+
+def validate_score(score: Any) -> int:
+    """Validate that a score is a nonnegative integer.
+
+    Critical Python edge-case:
+    In Python, `bool` is a subclass of `int` (`isinstance(True, int) is True`).
+    We explicitly reject booleans to prevent `True` from being treated as 1 goal.
+    Floats, strings, None and negative values are strictly prohibited.
+
+    Args:
+        score: The candidate score value.
+
+    Returns:
+        The validated integer score.
+
+    Raises:
+        ValueError: If score is not a strict, nonnegative integer.
+    """
+    if isinstance(score, bool) or not isinstance(score, int):
+        raise ValueError(
+            f"Invalid score {repr(score)}: score must be an integer, not {type(score).__name__}."
+        )
+
+    if score < 0:
+        raise ValueError(f"Invalid score {score}: scores cannot be negative.")
+
+    return score
+
+
+def record_result(
+    fixtures: list[dict[str, Any]],
+    fixture_id: str,
+    home_score: Any,
+    away_score: Any,
+) -> dict[str, Any]:
+    """Atomically record match scores for a scheduled pending fixture.
+
+    Enforces validate-before-mutate semantics:
+    Both scores are verified before updating any fixture fields.
+    Already played fixtures or non-existent fixture IDs are rejected.
+
+    Args:
+        fixtures: List of fixtures.
+        fixture_id: Identifier of the target fixture (e.g. 'M001').
+        home_score: Goals / rounds won by the home team.
+        away_score: Goals / rounds won by the away team.
+
+    Returns:
+        The updated fixture dictionary.
+
+    Raises:
+        ValueError: If fixture does not exist, was already played, or scores are invalid.
+    """
+    fixture = get_fixture_by_id(fixtures, fixture_id)
+    if fixture is None:
+        raise ValueError(f"Cannot record result: fixture '{fixture_id}' not found.")
+
+    if fixture.get("status") == "played":
+        raise ValueError(
+            f"Cannot record result: fixture '{fixture_id}' has already been played. "
+            f"Duplicate score submissions are prohibited."
+        )
+
+    if fixture.get("status") != "pending":
+        raise ValueError(
+            f"Cannot record result: fixture '{fixture_id}' has invalid status '{fixture.get('status')}'."
+        )
+
+    # Validate both scores before mutating fixture state
+    clean_home = validate_score(home_score)
+    clean_away = validate_score(away_score)
+
+    # Atomic state update
+    fixture["home_score"] = clean_home
+    fixture["away_score"] = clean_away
+    fixture["status"] = "played"
+
+    return fixture
