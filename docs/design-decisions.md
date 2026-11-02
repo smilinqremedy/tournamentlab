@@ -112,3 +112,63 @@ Prior to writing code, Engineer A and Engineer B agreed on the following divisio
    - Validate teams (unique IDs, 2-30 chars, unique casefold names).
    - Validate fixtures (IDs unique, home and away IDs must exist in loaded teams, no self-match, no duplicate unordered pair, status and scores match).
    - Only when all validation checks pass does the system replace active memory.
+
+---
+
+## 5. Peer Code Review Records
+
+### Pull Request #1: Team Registration, Round-Robin Fixtures & Persistence
+- **Author**: Engineer A (`feat/1-team-scheduling`)
+- **Reviewer**: Engineer B (`engineer.b@tournamentlab.local`)
+- **Review Summary**:
+  - *Comment 1*: "Good use of `casefold()` for case-insensitive duplicate checking. Did you verify that extra leading or trailing spaces are removed before the length check?"
+    - *Resolution*: Engineer A confirmed `raw_name.strip()` is performed before checking `2 <= len(name) <= 30`.
+  - *Comment 2*: "In `generate_round_robin`, why not use `itertools.combinations`?"
+    - *Resolution*: Engineer A explained that nested loops $i \in [0, N)$, $j \in [i+1, N)$ provide zero-dependency, deterministic indices and make the $N(N-1)/2$ derivation transparent to learners.
+  - *Comment 3*: "In `load_tournament`, does it handle a situation where a fixture lists a `home_score` but the status is `'pending'`?"
+    - *Resolution*: Engineer A added a strict check verifying that if `status == 'pending'`, both scores must be `None`.
+- **Verdict**: Approved and merged into `main` via merge commit `61eb402`.
+
+### Pull Request #2: Match Scoring, Standings Tie-Breaks, Simulation & CLI
+- **Author**: Engineer B (`feat/2-results-and-rankings`)
+- **Reviewer**: Engineer A (`engineer.a@tournamentlab.local`)
+- **Review Summary**:
+  - *Comment 1*: "The score validator rejects negative scores and floats, but what about `True`? In Python `isinstance(True, int)` is `True`!"
+    - *Resolution*: Engineer B added explicit `isinstance(score, bool)` guard and added unit tests in `test_scoring.py`.
+  - *Comment 2*: "How do we ensure that `compute_standings` cannot drift if a match is re-scored or deleted?"
+    - *Resolution*: Engineer B proved that standings are a pure function with no mutable cache. Added `verify_league_invariants()` to check point sums and goal balance.
+  - *Comment 3*: "In the CLI, can an empty string crash the menu?"
+    - *Resolution*: Engineer B verified that `input().strip()` handles empty inputs with a friendly reprompt.
+- **Verdict**: Approved and merged into `main` via merge commit `de275cc`.
+
+---
+
+## 6. Technical Defence & Cross-Check Solutions
+
+### Stage 0 Diagnostic Resolution
+- **Teams**: Red, Blue, Green ($N=3$).
+- **Unique pairs**: $3 \times 2 / 2 = 3$ pairs: (Red, Blue), (Blue, Green), (Red, Green).
+- **Match Results**:
+  1. Red 2–0 Blue $\to$ Red (3 pts, GF 2, GA 0), Blue (0 pts, GF 0, GA 2)
+  2. Blue 1–1 Green $\to$ Blue (1 pt, GF 1, GA 1), Green (1 pt, GF 1, GA 1)
+  3. Red 0–1 Green $\to$ Green (3 pts, GF 1, GA 0), Red (0 pts, GF 0, GA 1)
+- **Computed Standings**:
+  1. **Green**: P=2, W=1, D=1, L=0, GF=2, GA=1, GD=+1, **PTS=4** (Champion)
+  2. **Red**: P=2, W=1, D=0, L=1, GF=2, GA=1, GD=+1, **PTS=3**
+  3. **Blue**: P=2, W=0, D=1, L=1, GF=1, GA=3, GD=-2, **PTS=1**
+- **Invariants Check**:
+  - Total Points = $4 + 3 + 1 = 8$.
+  - Formula: $3 \times (\text{non-draws}) + 2 \times (\text{draws}) = 3(2) + 2(1) = 8$. (Holds!)
+  - Total GF ($2+2+1=5$) == Total GA ($1+1+3=5$). (Holds!)
+
+### Cross-Check Q&A
+1. *If a game ends 0–0, should both teams receive one point?*
+   - **Yes**. A draw is defined by `home_score == away_score`. Both teams receive 1 point, GF increases by 0, GA increases by 0, and GD remains unchanged.
+2. *If a team loses 3–2, does it still get two goals for?*
+   - **Yes**. Goals For (GF) tracks offensive production regardless of outcome. The team receives +2 GF, +3 GA, and 0 points for the loss.
+3. *Can two teams occupy the same points and GD, and how do you break the tie?*
+   - **Yes**. If points and GD are equal, the tie is broken by **Goals For** descending. If Goals For is also equal, the tie is broken by **Normalized Team Name** alphabetically ascending (`casefold()`).
+4. *Can a corrupt JSON file create a fixture with a phantom team?*
+   - **No**. The two-phase `load_tournament` parser enforces referential integrity: every `home_id` and `away_id` in `fixtures` must exist in `seen_team_ids`. Any unknown team ID triggers a `ValueError` immediately before active state is modified.
+5. *Why should rendering standings not modify fixtures?*
+   - Modifying state during display violates Command-Query Separation (CQS) and introduces non-idempotent side effects. Standings calculation must remain a pure function reading immutable records.
